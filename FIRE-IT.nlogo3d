@@ -2,13 +2,13 @@ breed [ consumers consumer ]
 breed [ providers provider ]
 
 globals [ count-interactions overall-ug temperature lambda]
-consumers-own [ ratings r_o my-providers my-providers-dist has-trust no-trust ug  activity-level]
+consumers-own [ ratings r_o my-providers my-providers-dist has-trust no-trust ug activity-level active]
 providers-own [ r_o performance-level performance-level-label my-consumers]
 
 to setup
   clear-all
   set temperature initial-temperature ;; temperature for exploit vs. exploration dilemma
-  set count-interactions 0 ;; number of round of interactions
+  set count-interactions 1 ;; number of round of interactions
   set overall-ug 0
   set lambda (-(5 / ln(0.5) )) ;; recency factor used for computing interaction trust
   set-default-shape turtles "circle"
@@ -22,38 +22,18 @@ to go
     if activity-level <= random-float 1.0
     [
       if any? my-providers [
+        set active 1
         let chosen (choose-provider self)
         ;show chosen
-        ;set count-interactions count-interactions + 1
-        ;set ug (get-performance-level chosen) * min list 1 (radius-operations-provider / (item (position chosen my-providers) my-providers-dist)) ;; quality is degraded linearly in proportion to the distance between c and p
         set ug [performance-level] of chosen * min list 1 (radius-operations-provider / oiseau-dist self chosen) ;; quality is degraded linearly in proportion to the distance between c and p
-        ;show (get-performance-level chosen)
-        ;show list 1 ((item (position chosen my-providers) my-providers-dist) / radius-operations-provider)
-        ;show list 1 (radius-operations-provider / (item (position chosen my-providers) my-providers-dist))
-        ;show list 1 (1 - radius-operations-provider / (item (position chosen my-providers) my-providers-dist))
-        ;show ug
-        ;show (item (position chosen my-providers) my-providers-dist) / radius-operations-provider
         add-rating self chosen "quality" ug / 10
-;        ifelse mean-ug-providers = "null"
-;        [set mean-ug-providers ug] ;; first interaction
-;        ;[set mean-ug-providers (( mean-ug-providers + ug ) / length my-providers )]
-;        [set mean-ug-providers (( mean-ug-providers + ug ) / count has-trust )]
-        ;show mean-ug-providers
       ]
     ]
   ]
-  let test one-of consumers
-  ;show [no-trust] of test
-  ;show [has-trust] of test
-  ;show count-interactions
-  ;if count-interactions mod 100 = 0 [ set temperature temperature - 1 ]
   set temperature ceiling ( initial-temperature - count-interactions  / 2)
+
   if temperature <= 1 [ set temperature 1 ]
-  if count-interactions > 0
-  [set overall-ug mean [ug] of consumers with [count has-trust != 0]]
-  ;show [ug] of consumers with [any? has-trust]
-  ;show [ug] of consumers with [length has-trust != 0]
-  ;set overall-ug compute-overall-ug
+  set overall-ug mean [ug] of consumers with [active = 1]
   set count-interactions count-interactions + 1
   tick
 end
@@ -61,22 +41,18 @@ end
 to setup-consumers
   create-consumers initial-number-consumers ;
   [
-    set my-providers turtle-set no-turtles;; list of providers in my radius of operations
-    set my-providers-dist [];; list of distances of providers
+    set my-providers no-turtles;; list of providers in my radius of operations
+    ;set my-providers-dist [];; list of distances of providers
     set ratings [] ;; list of ratings : R(a,b,c) r=(a,b,i,c,v)
     set has-trust no-turtles ;; list of providers who already have a trust value
     set no-trust no-turtles ;; list of providers who don't have a trust value yet
-    ;set omega-it [] ;; current IT rating weight
+    set active 0 ;; flag for plotting, becomes 1 after first interaction
     set ug "null"
-    ;set mean-ug-providers "null" ;; unused
-    ;set activity-level random-float 1.0
     set activity-level (random-float 1.0 + min-activity-level) - min-activity-level
     set color red
     set size 1
     tilt-up asin (1.0 - random-float 2.0)
-    ;tilt-up (random 1.0) * 2.0 - 1
     jump max-pxcor
-    ;set number who
   ]
 end
 
@@ -135,123 +111,104 @@ end
 
 to setup-provider-lists ;; list of providers in a consumer's range
   ask consumers [
-    let cpt 0
     let tmp-providers no-turtles
     ask providers [
-      let min_corde (2 - 2 * cos radius-operations-consumer) * max-pxcor
-      ;show min_corde
-      ;if min_corde < distance myself
-      ; [
-      ;show distance myself
-      set cpt cpt + 1
       if provider-is-in-range myself self [
-        ;set tmp-providers lput who tmp-providers
         set tmp-providers (turtle-set tmp-providers self)
         set my-consumers (turtle-set my-consumers myself)
       ]
-      ; ]
     ]
     set my-providers tmp-providers
-    ;show cpt
   ]
 end
-
-;to-report compute-overall-ug
-;  let somme ""
-;  ask consumers [
-;    if ug != "null"
-;    [
-;      ifelse somme = ""
-;      [set somme ug
-;      set overall-ug-list (lput ug overall-ug-list)]
-;      [set somme somme + ug
-;      set overall-ug-list (lput ug overall-ug-list)]
-;    ]
-;  ]
-;  report somme / count consumers
-;end
 
 ;;consumer procedure
 to-report choose-provider [ a ] ;; returns chosen provider
   let trust-values []
-  ;let has-trust [] ;; list of providers who already have a trust value
-  ;let no-trust [] ;; list of providers who don't have a trust value yet
-  let value "null"
-  let er 0
+  let max-value list -2 nobody ;; couple (max-value, provider)
+  let value-tmp 0
+  let er1 0
   let chosen 0
   ask a [
     let has-trust-tmp has-trust
     let no-trust-tmp no-trust
     ask my-providers [
-      set value (compute-it myself self)
-      ;show value
-      ifelse value = "null"
+      set value-tmp compute-it myself self
+      ;show value-tmp
+      ifelse value-tmp = "null"
       [
         if not member? self no-trust-tmp
-        [set no-trust-tmp (turtle-set self no-trust-tmp)]
+        [set no-trust-tmp (turtle-set self no-trust-tmp)] ;; add provider to no-trust
       ]
       [
+        if value-tmp > item 0 max-value ;; compute maximum in trust-values
+        [set max-value (list value-tmp self)]
         if not member? self has-trust-tmp
         [
-          ask no-trust-tmp [set no-trust-tmp no-trust-tmp with [self != myself]]
-          set has-trust-tmp (turtle-set self has-trust-tmp)
+          ;show no-trust-tmp
+          ask self [set no-trust-tmp other no-trust-tmp] ;; remove provider from no-trust
+          ;show no-trust-tmp
+          set has-trust-tmp (turtle-set self has-trust-tmp) ;; add him to has-trust
         ]
       ]
-      set trust-values lput value trust-values
-
+      set trust-values lput (list value-tmp self) trust-values
     ]
     set has-trust has-trust-tmp
     set no-trust no-trust-tmp
   ]
-  ;show no-trust
-  ;show has-trust
   ;show trust-values
-  ifelse count no-trust = 0
+  if count no-trust = 0
   [
-    set chosen max-one-of my-providers [performance-level] ;; if there are no providers without a trust value, choose the best one
+    ;set chosen max-one-of my-providers [performance-level] ;; if there are no providers without a trust value, choose the best one
+    set chosen item 1 max-value
+    ;show chosen
     ;show "NO-TRUST IS EMPTY, CHOOSING BEST PROVIDER"
     ;show count no-trust
     report chosen
   ]
+  if count has-trust = 0
   [
-    ;show no-trust
-    if not any? has-trust
-    [
-      set chosen one-of no-trust ;; if it's the consumer's first interaction, choose a random provider
-      ;show "HAS-TRUST IS EMPTY, CHOOSING RANDOM PROVIDER"
-      report chosen
-    ]
+    set chosen one-of no-trust ;; if it's the consumer's first interaction, choose a random provider
+    ;show "HAS-TRUST IS EMPTY, CHOOSING RANDOM PROVIDER"
+    ;show chosen
+    report chosen
+  ]
+  set er1 expected-return a trust-values max-value
+;  show er1
+  ;if er = "null" [report one-of no-trust] ;; should not happen because of previous test (has-trust empty)
+  ifelse random-float 1.0 <= er1
+  [
+    ;show max-value
+    set chosen item 1 max-value
+    ;show chosen
+    ;show "CHOSE ACTION A1 (BEST PROVIDER : EXPLOIT)"
+    report chosen
 
-    set er expected-return a trust-values
-    ;show er
-    if er = "null" [report one-of no-trust] ;; should not happen because of previous test
-    ifelse er <= random-float 1.0
-    [
-      report max-one-of my-providers [performance-level]
-      ;show "CHOSE ACTION A1 (BEST PROVIDER : EXPLOIT)"
-    ]
-    [
-      report one-of no-trust
-      ;show "CHOSE ACTION A2 (RANDOM PROVIDER IN NO-TRUST : EXPLORE)"
-    ]
+  ]
+  [
+    set chosen one-of no-trust
+    ;show chosen
+    ;show "CHOSE ACTION A2 (RANDOM PROVIDER IN NO-TRUST : EXPLORE)"
+    report chosen
   ];; compute expected return of choosing a provider without a trust value and choose it based on formula
-   ;[report one-of my-providers]
 end
 
-to-report expected-return [ a trust-values ]
+to-report expected-return [ a trust-values max-value]
   let er-1 0
   let er-2 0
-  let trust-values-providers remove "null" trust-values
+  let trust-values-providers []
+  foreach trust-values [ couple ->
+    if item 0 couple != "null"
+    [set trust-values-providers lput item 0 couple trust-values-providers]
+  ]
   ;show trust-values-providers
   ask a [
-    ifelse any? has-trust
-    [set er-1 -1 ]
-    [set er-1 exp ((max [performance-level] of my-providers ) / temperature )]
-    set er-2 er-1 + exp ( mean [performance-level] of has-trust / temperature )
+    set er-1 exp ( item 0 max-value / temperature )
+;    [set er-1 exp ( item 0 max-value * ln ticks )]
+    set er-2 er-1 + exp ( mean trust-values-providers / temperature )
+;    set er-2 er-1 + exp ( mean trust-values-providers * ln ticks )
   ]
-  ifelse er-1 = -1
-  [report "null"]
-  [report (er-1 / er-2)]
+  report (er-1 / er-2)
 end
 
 to add-rating [a b c v]
@@ -264,14 +221,6 @@ to add-rating [a b c v]
     [set ratings lput (list a b count-interactions c v) ratings]
   ]
 end
-
-;to-report get-performance-level [ b ]
-;  let val 0
-;  ask providers with [who = b] [
-;    set val performance-level
-;  ]
-;  report val
-;end
 
 to-report provider-is-in-range [ a b ] ;; returns true if provider b is in consumer a 's range
   if oiseau-dist a b <= radius-operations-consumer [
@@ -305,43 +254,23 @@ end
 ;; compute interaction trust component
 to-report compute-it [ a b ]
   let it 0
+  let omega 0
   ;let len-rating 1
   let ratings-with-b []
-  ;let omega [] ;; old omega method, now with recency factor lambda ( omega_ri = exp( -(count-interactions - item 2 rating / lambda ))
-  ;let sum-omega 0
-  ;let rating-cpt []
   ask a [
-    ;   foreach ratings [ rating ->
-    ;      if item 1 rating = b [
-    ;       set ratings-with-b lput item 4 rating ratings-with-b
-    ;       ;set len-rating len-rating + 1
-    ;      ]
-    ;    ]
     set ratings-with-b filter [rating -> item 1 rating = b] ratings ;; faster method
     ;show ratings-with-b
-    ;set len-rating length ratings
-    ;set rating-cpt n-values len-rating [ i -> i + 1 ]
-    ;set sum-omega sum rating-cpt
-    ;foreach rating-cpt [ v -> set omega lput (v / sum-omega) omega ]
   ]
-  ;show ratings-with-b
+
   ifelse (empty? ratings-with-b) [ report "null" ]
-  [;show ratings-with-b
-   ;show empty? ratings-with-b
-    let cpt 0
-    while [ cpt < length ratings-with-b ] [
-      ;show cpt
-      ;show len-rating
-      ;set it it + ((item cpt ratings-with-b) * (item cpt omega)) ;;old method
-      ;set it it + ((item 4 item cpt ratings-with-b) * (item cpt omega)) ;;faster old method
-      set it it + ((item 4 item cpt ratings-with-b) * exp (- (count-interactions - (item 2 item cpt ratings-with-b)) / lambda )) ;; faster method with recency factor
-      set cpt cpt + 1
+  [
+    foreach ratings-with-b [ rating ->
+      set it it + ((item 4 rating) * exp (- (count-interactions - item 2 rating) / lambda ))
+      set omega omega + exp (- (count-interactions - item 2 rating) / lambda )
     ]
-    report it
   ]
   ;show omega
-  ;show ratings-with-b
-  ;report it
+  report it / omega
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -399,7 +328,7 @@ initial-number-consumers
 initial-number-consumers
 0
 1000
-510.0
+500.0
 1
 1
 NIL
@@ -445,7 +374,7 @@ PLOT
 UG for IT
 Interactions
 UG
-0.0
+1.0
 10.0
 -2.0
 7.0
@@ -491,7 +420,7 @@ radius-operations-consumer
 radius-operations-consumer
 0
 100
-40.0
+20.0
 1
 1
 NIL
@@ -506,7 +435,7 @@ radius-operations-provider
 radius-operations-provider
 0
 100
-29.0
+50.0
 1
 1
 NIL
@@ -1060,7 +989,7 @@ need-to-manually-make-preview-for-this-model
 @#$#@#$#@
 @#$#@#$#@
 <experiments>
-  <experiment name="experiment" repetitions="500" runMetricsEveryStep="true">
+  <experiment name="Figure 9" repetitions="500" runMetricsEveryStep="true">
     <setup>setup</setup>
     <go>go</go>
     <timeLimit steps="200"/>
@@ -1090,13 +1019,13 @@ need-to-manually-make-preview-for-this-model
       <value value="5"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="radius-operations-provider">
-      <value value="29"/>
+      <value value="50"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="sig-bad">
       <value value="2"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="initial-number-consumers">
-      <value value="510"/>
+      <value value="500"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="H">
       <value value="10"/>
