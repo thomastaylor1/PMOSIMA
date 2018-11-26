@@ -2,7 +2,7 @@ breed [ consumers consumer ]
 breed [ providers provider ]
 
 globals [ count-interactions overall-ug-it overall-ug-wr temperature lambda Rw]
-consumers-own [ ratings r_o my-providers my-neighbours has-trust no-trust ug activity-level active trust-component]
+consumers-own [ ratings r_o my-providers my-neighbours has-trust no-trust ug activity-level active trust-component rt-flag chosen-provider]
 providers-own [ r_o performance-level performance-level-label my-consumers]
 
 to setup
@@ -25,15 +25,16 @@ to go
     [
       if any? my-providers [
         set active 1
-        let chosen (choose-provider self)
+        set color red
+        set chosen-provider (choose-provider self)
         ;show chosen
-        set ug [performance-level] of chosen * min list 1 (radius-operations-provider / oiseau-dist self chosen) ;; quality is degraded linearly in proportion to the distance between c and p
-        add-rating self chosen "quality" ug / 10
+        set ug [performance-level] of chosen-provider * min list 1 (radius-operations-provider / oiseau-dist self chosen-provider) ;; quality is degraded linearly in proportion to the distance between c and p
+        set rt-flag true
       ]
     ]
   ]
+  ask consumers with [rt-flag] [add-rating self chosen-provider "quality" ug / 10]
   set temperature ceiling ( initial-temperature - count-interactions  / 2)
-
   if temperature <= 1 [ set temperature 1 ]
   set overall-ug-it mean [ug] of consumers with [active = 1 and trust-component = "IT"]
   set overall-ug-wr mean [ug] of consumers with [active = 1 and trust-component = "WR"]
@@ -52,6 +53,8 @@ to setup-consumers
     set active 0 ;; flag for plotting, becomes 1 after first interaction
     set trust-component "null" ;; trust component used by the consumer
     set ug "null"
+    set rt-flag false ;; flag used so that rounds of interaction are simultaneous
+    set chosen-provider 0
     set activity-level (random-float 1.0 + min-activity-level) - min-activity-level
     set color red
     set size 1
@@ -160,26 +163,29 @@ to-report choose-provider [ a ] ;; returns chosen provider
   ask a [
     let has-trust-tmp has-trust
     let no-trust-tmp no-trust
+    if count my-providers = 1 [ show "CAS SENSIBLE" ]
     ask my-providers [
-      if [trust-component] of myself = "IT"
+      if [trust-component] of myself = "IT" ;; IT COMPONENT
       [set value-tmp compute-it myself self]
-      if [trust-component] of myself = "WR"
+      if [trust-component] of myself = "WR" ;; WR COMPONENT
       [set value-tmp compute-wr myself self]
       ;show value-tmp
       ifelse value-tmp = "null"
       [
-        if not member? self no-trust-tmp
+        if not member? self no-trust-tmp and not member? self has-trust-tmp
         [set no-trust-tmp (turtle-set self no-trust-tmp)] ;; add provider to no-trust
       ]
       [
         if value-tmp > item 0 max-value ;; compute maximum in trust-values
         [set max-value (list value-tmp self)]
+        ;show not member? self has-trust-tmp
         if not member? self has-trust-tmp
         [
-          ;show no-trust-tmp
-          ask self [set no-trust-tmp other no-trust-tmp] ;; remove provider from no-trust
-          ;show no-trust-tmp
+          ;show a
+          ;show self
           set has-trust-tmp (turtle-set self has-trust-tmp) ;; add him to has-trust
+          set no-trust-tmp (other no-trust-tmp) ;; remove provider from has-trust
+          ;show no-trust-tmp
         ]
       ]
       set trust-values lput (list value-tmp self) trust-values
@@ -188,10 +194,12 @@ to-report choose-provider [ a ] ;; returns chosen provider
     set no-trust no-trust-tmp
   ]
   ;show trust-values
+  ;show has-trust
+  ;show no-trust
   if count no-trust = 0
   [
-    ;set chosen max-one-of my-providers [performance-level] ;; if there are no providers without a trust value, choose the best one
-    set chosen item 1 max-value
+    ;set chosen max-one-of my-providers [performance-level]
+    set chosen item 1 max-value ;; if there are no providers without a trust value, choose the best one
     ;show chosen
     ;show "NO-TRUST IS EMPTY, CHOOSING BEST PROVIDER"
     ;show count no-trust
@@ -250,6 +258,7 @@ to add-rating [a b c v]
       set ratings lput (list a b count-interactions c v) ratings
     ]
     [set ratings lput (list a b count-interactions c v) ratings]
+    set rt-flag false
   ]
 end
 
@@ -261,23 +270,8 @@ to-report provider-is-in-range [ a b ] ;; returns true if provider b is in consu
 end
 
 to-report oiseau-dist [ a b ]
-  let b_coord []
-  let corde2 0
-  let oiseau 0
-  let my-range 0
   let r-sphere max-pxcor
-  ask b [
-    set b_coord lput (xcor / r-sphere) b_coord
-    set b_coord lput (ycor / r-sphere) b_coord
-    set b_coord lput (zcor / r-sphere) b_coord  ;; triplet of b's coordinates
-  ]
-  ;show b_coord
-  ask a [
-    set corde2 corde2 + (item 0 b_coord - (xcor / r-sphere))^ 2
-    set corde2 corde2 + (item 1 b_coord - (ycor / r-sphere))^ 2
-    set corde2 corde2 + (item 2 b_coord - (zcor / r-sphere))^ 2 ;; (x2 - x1) + (y2 - y1) + (z2 - z1)
-                                                                ;show corde2
-  ]
+  let corde2 ([xcor] of b / r-sphere - [xcor] of a / r-sphere)^ 2 + ([ycor] of b / r-sphere - [ycor] of a / r-sphere)^ 2 + ([zcor] of b / r-sphere - [zcor] of a / r-sphere)^ 2 ;(x2 - x1)² + (y2 - y1)² + (z2 - z1)²
   report acos ( 1 - corde2 / 2 )
 end
 
@@ -314,10 +308,15 @@ to-report compute-wr [ a b ]
     ifelse count my-neighbours >= nBF
     [set acqs min-n-of nBF my-neighbours [oiseau-dist myself b]]
     [set acqs my-neighbours]
-
     ask acqs [
       query-ratings b 0
     ]
+  ]
+  show acqs
+  show Rw
+  if count [my-providers] of a = 1 [
+    ;show Rw
+    ;show a
   ]
   ifelse (empty? Rw) [ report "null" ]
   [
@@ -328,23 +327,24 @@ to-report compute-wr [ a b ]
   ]
   ;show omega
   report wr / omega
-
-
 end
 
 to query-ratings [ b currRL ]
   let ratings-with-b []
   let acqs []
+  let already-asked no-turtles
+  set color yellow
   if currRL <= nRL ;; or a found sufficient witnesses (?)
   [
     set ratings-with-b filter [rating -> item 1 rating = b] ratings
     ;show (sentence ratings-with-b)
     ifelse empty? ratings-with-b
     [
-      ifelse count my-neighbours >= nBF
+      ifelse count my-neighbours with [not member? self already-asked] >= nBF
       ;[set acqs min-n-of nBF my-neighbours [oiseau-dist myself b]]
-      [set acqs min-n-of nBF my-neighbours [distance b]]
+      [set acqs min-n-of nBF my-neighbours with [not member? self already-asked] [distance b]]
       [set acqs my-neighbours]
+      set already-asked (turtle-set already-asked acqs)
       ask acqs [
         query-ratings b (currRL + 1)
       ]
@@ -355,6 +355,77 @@ to query-ratings [ b currRL ]
     ]
   ]
 end
+
+to test
+  let test1 turtle-set turtle 1
+  show test1
+  ask turtle 1 [ set test1 other test1 ]
+  show test1
+end
+;to query-ratings [ b currRL ]
+;  let ratings-with-b []
+;  let acqs []
+;  if currRL <= nRL ;; or a found sufficient witnesses (?)
+;  [
+;    set ratings-with-b filter [rating -> item 1 rating = b] ratings
+;    ;show (sentence ratings-with-b)
+;    ifelse empty? ratings-with-b
+;    [
+;      ifelse count my-neighbours >= nBF
+;      ;[set acqs min-n-of nBF my-neighbours [oiseau-dist myself b]]
+;      [set acqs min-n-of nBF my-neighbours [distance b]]
+;      [set acqs my-neighbours]
+;      ask acqs [
+;        query-ratings b (currRL + 1)
+;      ]
+;      ;show Rw
+;    ]
+;    [
+;      set Rw lput (sentence ratings-with-b) Rw
+;    ]
+;  ]
+;end
+
+;to query-ratings [ a b currRL ]
+;  let stack []
+;  let elt []
+;  let ratings-with-b []
+;  let acqs []
+;  let already-asked no-turtles
+;  set stack lput (list a b currRL) stack
+;  while [not empty? stack]
+;  [
+;    ;show already-asked
+;    set elt item 0 stack
+;    set stack but-first stack
+;    ask item 0 elt [
+;      if item 2 elt <= nRL ;; or a found sufficient witnesses (?)
+;      [
+;        set ratings-with-b filter [rating -> item 1 rating = b] ratings
+;        ;show (sentence ratings-with-b)
+;        ifelse empty? ratings-with-b
+;        [
+;          ifelse count my-neighbours with [not member? self already-asked] >= nBF
+;          [
+;              set acqs min-n-of nBF my-neighbours with [not member? self already-asked] [oiseau-dist (item 0 elt) b]
+;              set already-asked (turtle-set already-asked acqs)
+;          ]
+;          [
+;            set acqs my-neighbours
+;            set already-asked (turtle-set already-asked acqs)
+;          ]
+;          ask acqs [
+;            set stack lput (list self b (item 2 elt + 1) ) stack
+;          ]
+;          ;show Rw
+;        ]
+;        [
+;          set Rw lput (sentence ratings-with-b) Rw
+;        ]
+;      ]
+;    ]
+;  ]
+;end
 @#$#@#$#@
 GRAPHICS-WINDOW
 0
@@ -411,7 +482,7 @@ NC
 NC
 0
 1000
-100.0
+1000.0
 1
 1
 NIL
@@ -519,7 +590,7 @@ radius-operations-provider
 radius-operations-provider
 0
 100
-21.0
+20.0
 1
 1
 NIL
@@ -749,7 +820,7 @@ NCit
 NCit
 0
 500
-50.0
+500.0
 1
 1
 NIL
@@ -764,7 +835,7 @@ NCwr
 NCwr
 0
 500
-50.0
+500.0
 1
 1
 NIL
@@ -795,6 +866,23 @@ overall-ug-wr
 5
 1
 11
+
+BUTTON
+111
+52
+174
+85
+NIL
+test
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
 
 @#$#@#$#@
 ## WHAT IS IT?
