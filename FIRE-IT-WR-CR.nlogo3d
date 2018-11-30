@@ -1,9 +1,9 @@
 breed [ consumers consumer ]
 breed [ providers provider ]
 
-globals [ count-interactions overall-ug-it overall-ug-wr temperature lambda gamma Rw]
-consumers-own [ ratings r_o my-providers my-neighbours has-trust no-trust ug activity-level active trust-component rt-flag chosen-provider]
-providers-own [ r_o performance-level performance-level-label my-consumers]
+globals [ count-interactions overall-ug-it overall-ug-wr overall-ug-cr temperature lambda gamma Rw ]
+consumers-own [ ratings r_o my-providers my-neighbours has-trust no-trust ug activity-level active trust-component rt-flag chosen-provider it-component wr-component cr-component]
+providers-own [ r_o performance-level performance-level-label my-consumers certificates ]
 
 to setup
   clear-all
@@ -33,11 +33,15 @@ to go
       ]
     ]
   ]
-  ask consumers with [rt-flag] [add-rating self chosen-provider "quality" ug / 10]
+  ask consumers with [rt-flag] [
+    add-rating self chosen-provider "quality" ug / 10
+    add-certificate self chosen-provider "quality" ug / 10 ;; add it to the provider's list of certificates
+  ]
   set temperature ceiling ( initial-temperature - count-interactions  / 2)
   if temperature <= 1 [ set temperature 1 ]
   set overall-ug-it mean [ug] of consumers with [active = 1 and trust-component = "IT"]
   set overall-ug-wr mean [ug] of consumers with [active = 1 and trust-component = "WR"]
+  set overall-ug-cr mean [ug] of consumers with [active = 1 and trust-component = "CR"]
   set count-interactions count-interactions + 1
 ;  show "-------------- Round ended ----------------"
   tick
@@ -63,9 +67,26 @@ to setup-consumers
     jump max-pxcor
   ]
   ask n-of NCit consumers with [trust-component = "null"]
-  [ set trust-component "IT" ]
+  [
+    set trust-component "IT"
+    set it-component true
+    set wr-component false
+    set cr-component false
+  ]
   ask n-of NCwr consumers with [trust-component = "null"]
-  [ set trust-component "WR" ]
+  [
+    set trust-component "WR"
+    set it-component true
+    set wr-component true
+    set cr-component false
+  ]
+  ask n-of NCcr consumers with [trust-component = "null"]
+  [
+    set trust-component "CR"
+    set it-component true
+    set wr-component false
+    set cr-component true
+  ]
 end
 
 to setup-providers
@@ -79,6 +100,7 @@ to setup-providers
     ;set performance-level one-of [-10 -5 0 5 10] ;; performance level
     set performance-level "null"
     set my-consumers no-turtles
+    set certificates []
     set color red
     tilt-up asin (1.0 - random-float 2.0)
     jump max-pxcor
@@ -138,19 +160,14 @@ to-report choose-provider [ a ] ;; returns chosen provider
   ask a [
     let has-trust-tmp has-trust
     let no-trust-tmp no-trust
-    ;if count my-providers = 1 [ show "CAS SENSIBLE" ]
     ask my-providers [
-;      show [breed] of a
-;      show self
-;      show myself
-;      show a
       if [trust-component] of myself = "IT" ;; IT COMPONENT
-;      [set value-tmp overall-trust myself self]
-      [set value-tmp compute-it myself self]
+      [set value-tmp overall-trust myself self]
+;      [set value-tmp compute-it myself self]
       if [trust-component] of myself = "WR" ;; WR COMPONENT
       [set value-tmp overall-trust myself self]
-;        show value-tmp
-;      show overall-trust myself self
+      if [trust-component] of myself = "CR" ;; CR COMPONENT
+      [set value-tmp overall-trust myself self]
 ;      show value-tmp
       ifelse value-tmp = "null"
       [
@@ -160,14 +177,10 @@ to-report choose-provider [ a ] ;; returns chosen provider
       [
         if value-tmp > item 0 max-value ;; compute maximum in trust-values
         [set max-value (list value-tmp self)]
-        ;show not member? self has-trust-tmp
         if not member? self has-trust-tmp
         [
-          ;show a
-          ;show self
           set has-trust-tmp (turtle-set self has-trust-tmp) ;; add him to has-trust
           set no-trust-tmp (other no-trust-tmp) ;; remove provider from has-trust
-          ;show no-trust-tmp
         ]
       ]
       set trust-values lput (list value-tmp self) trust-values
@@ -175,12 +188,8 @@ to-report choose-provider [ a ] ;; returns chosen provider
     set has-trust has-trust-tmp
     set no-trust no-trust-tmp
   ]
-  ;show trust-values
-  ;show has-trust
-  ;show no-trust
   if count no-trust = 0
   [
-    ;set chosen max-one-of my-providers [performance-level]
     set chosen item 1 max-value ;; if there are no providers without a trust value, choose the best one
     ;show chosen
     ;show "NO-TRUST IS EMPTY, CHOOSING BEST PROVIDER"
@@ -194,24 +203,19 @@ to-report choose-provider [ a ] ;; returns chosen provider
     ;show chosen
     report chosen
   ]
-  set er1 expected-return a trust-values max-value
-;  show er1
-  ;if er = "null" [report one-of no-trust] ;; should not happen because of previous test (has-trust empty)
+  set er1 expected-return a trust-values max-value ;; compute expected return of choosing a provider without a trust value and choose it based on formula
   ifelse random-float 1.0 <= er1
   [
-    ;show max-value
     set chosen item 1 max-value
-    ;show chosen
     ;show "CHOSE ACTION A1 (BEST PROVIDER : EXPLOIT)"
     report chosen
 
   ]
   [
     set chosen one-of no-trust
-    ;show chosen
     ;show "CHOSE ACTION A2 (RANDOM PROVIDER IN NO-TRUST : EXPLORE)"
     report chosen
-  ];; compute expected return of choosing a provider without a trust value and choose it based on formula
+  ]
 end
 
 to-report expected-return [ a trust-values max-value]
@@ -244,11 +248,27 @@ to add-rating [a b c v]
   ]
 end
 
-to-report provider-is-in-range [ a b ] ;; returns true if provider b is in consumer a 's range, unused
-  if oiseau-dist a b <= radius-operations-consumer [
-    report true
+;to add-rating [a b c v]
+;  ask a  [
+;    ifelse length ratings >= H ;; if b has more than H ratings
+;    [
+;      set ratings lput (list a b count-interactions c v) but-first ratings
+;    ]
+;    [set ratings lput (list a b count-interactions c v) ratings]
+;    set rt-flag false
+;  ]
+;end
+
+to add-certificate [a b c v]
+  ask b [
+    let tmp-certificates fput (list a b count-interactions c v) certificates
+    set tmp-certificates (sort-by [ [x y] -> item 4 x > item 4 y ] tmp-certificates)
+    if length tmp-certificates > H
+    [
+      set tmp-certificates sublist tmp-certificates 0 (H - 1)
+    ]
+    set certificates tmp-certificates
   ]
-  report false
 end
 
 to-report oiseau-dist [ a b ]
@@ -275,152 +295,135 @@ to-report compute-it [ a b ]
   report it / omega
 end
 
+;to-report overall-trust [ a b ]
+;  let nomT 0
+;  let omega 0
+;  let Wk 0
+;  if [it-component] of a
+;  [
+;    let Ri get-ratings-with-b a b
+;    let coupleI component-trust Ri "IT"
+;    if empty? coupleI [ report "null" ]
+;    set nomT nomT + (Wi * item 1 coupleI) * item 0 coupleI
+;    set omega omega + (Wi * item 1 coupleI)
+;    set Wk Wk + Wi
+;  ]
+;
+;  if [wr-component] of a
+;  [
+;    set Rw []
+;    query-ratings a a b 0 no-turtles
+;    let coupleW component-trust Rw "WR"
+;    if empty? coupleW [ report "null" ]
+;    set nomT (nomT + (Ww * item 1 coupleW) * item 0 coupleW)
+;    set omega omega + (Ww * item 1 coupleW)
+;    set Wk Wk + Ww
+;  ]
+;
+;  if [cr-component] of a
+;  [
+;    let Rc ([certificates] of b)
+;    let coupleC component-trust Rc "CR"
+;    if empty? coupleC [ report "null" ]
+;    set nomT (nomT + (Wc * item 1 coupleC) * item 0 coupleC)
+;    set omega (omega + (Wc * item 1 coupleC) )
+;    set Wk Wk + Wc
+;  ]
+;  if omega = 0 [ report 0 ]
+;  report nomT / omega
+;end
 
 to-report overall-trust [ a b ]
-  let nomT 0
-  let omega 0
-;  ask a [ show who ]
-;  ask b [ show who ]
-  if Wi > 0
+  let nomT []
+  let omega []
+  let Wk 0
+  if [it-component] of a
   [
     let Ri get-ratings-with-b a b
     let coupleI component-trust Ri "IT"
     if empty? coupleI [ report "null" ]
-;    show "----------"
-;    show "Tk : "
-;    show item 0 coupleI
-;    show "compute-it : "
-;    show compute-it a b
-;    show "----------"
-;
-;    show "Ri : "
-;    show Ri;
-;    show "----------"
-    set nomT nomT + (Wi * item 1 coupleI) * item 0 coupleI
-    set omega omega + (Wi * item 1 coupleI)
+    set nomT (fput item 0 coupleI nomT)
+    set omega (fput (Wi * item 1 coupleI) omega)
+    set Wk Wk + Wi
   ]
-  if Ww > 0
+
+  if [wr-component] of a
   [
     set Rw []
     query-ratings a a b 0 no-turtles
-;    show "Rw : "
-;    show Rw
     let coupleW component-trust Rw "WR"
     if empty? coupleW [ report "null" ]
-    set nomT (nomT + (Ww * item 1 coupleW) * item 0 coupleW)
-    set omega omega + (Ww * item 1 coupleW)
+    set nomT (fput item 0 coupleW nomT)
+    set omega (fput (Ww * item 1 coupleW) omega)
+    set Wk Wk + Ww
   ]
-  if omega = 0 [ report 0 ]
-  report nomT / omega
+
+  if [cr-component] of a
+  [
+    let Rc ([certificates] of b)
+    let coupleC component-trust Rc "CR"
+    if empty? coupleC [ report "null" ]
+    set nomT (fput item 0 coupleC nomT)
+    set omega (fput (Wc * item 1 coupleC) omega)
+    set Wk Wk + Wc
+  ]
+
+  if empty? omega [ report "null" ]
+  report (sum (map * omega nomT)) / (sum omega)
 end
 
 ;; computes Tk and rhoK
+;to-report component-trust [ Rk component ]
+;  let nomT 0
+;  let nomRho 0
+;  let omega 0
+;  let Tk 0
+;  ifelse not empty? Rk [
+;    foreach Rk [ rating ->
+;      set nomT nomT + ((item 4 rating) * exp (- (count-interactions - item 2 rating) / lambda ))
+;      set omega omega + exp (- (count-interactions - item 2 rating) / lambda )
+;    ]
+;    set Tk nomT / omega
+;    foreach Rk [ rating ->
+;      set nomRho nomRho + (abs (item 4 rating - Tk) * (exp (- (count-interactions - item 2 rating) / lambda )))
+;    ]
+;    let rhoRK (1 - exp (- gamma * omega))
+;    let rhoDK 1 - ( 0.5 * ( nomRho / omega ) )
+;    let rhoK rhoRK * rhoDK
+;    report (list Tk rhoK)
+;  ][ report [] ]
+;end
+
 to-report component-trust [ Rk component ]
   let nomT 0
   let nomRho 0
   let omega 0
   let Tk 0
-  if empty? Rk [ report [] ]
-  if component = "IT"
-  [
+  ifelse not empty? Rk [
     foreach Rk [ rating ->
-      set nomT nomT + ((item 4 rating) * exp (- (count-interactions - item 2 rating) / lambda ))
-      set omega omega + exp (- (count-interactions - item 2 rating) / lambda )
+      set nomT nomT + ((item 4 rating) * weight-reporter rating)
+      set omega (omega + weight-reporter rating)
     ]
     set Tk nomT / omega
     foreach Rk [ rating ->
-      set nomRho nomRho + (abs (item 4 rating - Tk) * exp (- (count-interactions - item 2 rating) / lambda ))
+      set nomRho (nomRho + abs (item 4 rating - Tk) *  weight-reporter rating)
     ]
-  ]
-
-  if component = "WR"
-  [
-    foreach Rk [ rating ->
-      set nomT nomT + ((item 4 rating) * exp (- (count-interactions - item 2 rating) / lambda ))
-      set omega omega + exp (- (count-interactions - item 2 rating) / lambda )
-    ]
-    set Tk nomT / omega
-    foreach Rk [ rating ->
-      set nomRho nomRho + (abs (item 4 rating - Tk) * exp (- (count-interactions - item 2 rating) / lambda ))
-    ]
-  ]
-  let rhoRK (1 - exp (- gamma * omega))
-;  show omega
-;  show rhoRK
-  let rhoDK 1 - ( 0.5 * ( nomRho / omega ) )
-;  show rhoDK
-  let rhoK rhoRK * rhoDK
-;  show rhoK
-;  if rhoK = 0 [show "RHO NUL"]
-  report list Tk rhoK
-
+    let rhoRK (1 - exp (- gamma * omega))
+    let rhoDK 1 - ( 0.5 * ( nomRho / omega ) )
+    let rhoK (rhoRK * rhoDK)
+    report (list Tk rhoK)
+  ][ report [] ]
 end
 
 to-report get-ratings-with-b [ a b ]
   let toRep []
-  ask a [
-    set toRep filter [rating -> item 1 rating = b] ratings ]
+  ask a [set toRep filter [rating -> item 1 rating = b] ratings]
   report toRep
 end
 
-;; compute witness reputation component for a given provider b
-;to-report compute-wr [ a b ]
-;  ;set Rw []
-;  let wr 0
-;  let omega 0
-;  let acqs no-turtles
-;  ask a [
-;    ifelse count my-neighbours >= nBF
-;    [set acqs min-n-of nBF my-neighbours [oiseau-dist myself b]]
-;    [set acqs my-neighbours]
-;    ask acqs [
-;      query-ratings b 0
-;    ]
-;  ]
-;  ;show acqs
-;  ;show Rw
-;  if count [my-providers] of a = 1 [
-;    ;show Rw
-;    ;show a
-;  ]
-;  ifelse (empty? Rw) [ report "null" ]
-;  [
-;    foreach Rw [ rating ->
-;      set wr wr + ((item 4 item 0 rating) * exp (- (count-interactions - item 2 item 0 rating) / lambda ))
-;      set omega omega + exp (- (count-interactions - item 2 item 0 rating) / lambda )
-;    ]
-;  ]
-;  ;show omega
-;  report wr / omega
-;end
-
-;; used by the WR group to get Rw(a,b,c)
-;to query-ratings [ b currRL ]
-;  let ratings-with-b []
-;  let acqs []
-;  let already-asked no-turtles
-;  set color yellow
-;  if currRL <= nRL ;; or a found sufficient witnesses (?)
-;  [
-;    set ratings-with-b filter [rating -> item 1 rating = b] ratings
-;    ;show (sentence ratings-with-b)
-;    ifelse empty? ratings-with-b
-;    [
-;      ifelse count my-neighbours with [not member? self already-asked] >= nBF
-;      ;[set acqs min-n-of nBF my-neighbours [oiseau-dist myself b]]
-;      [set acqs min-n-of nBF my-neighbours with [not member? self already-asked] [distance b]]
-;      [set acqs my-neighbours]
-;      set already-asked (turtle-set already-asked acqs)
-;      ask acqs [
-;        query-ratings b (currRL + 1)
-;      ]
-;      ;show Rw
-;    ]
-;    [
-;      set Rw lput (sentence ratings-with-b) Rw
-;    ]
-;  ]
-;end
+to-report weight-reporter [ rating ]
+  report exp (- (count-interactions - item 2 rating) / lambda )
+end
 
 to query-ratings [ caller a b currRL already-asked ]
   let Rwi []
@@ -443,36 +446,6 @@ to query-ratings [ caller a b currRL already-asked ]
   ]
 end
 
-;to-report query-ratings [ a asker b currRL already-asked Rw] ; appel query-ratings b 0 no-turtles
-;  let ratings-with-b []
-;  let Rwi []
-;  let acqs []
-;  ;let already-asked no-turtles
-;  set color yellow
-;;  show who
-;  ifelse currRL <= nRL ;; or a found sufficient witnesses (?)
-;  [
-;    if a != asker [set Rw get-ratings-with-b a b]
-;    ;show (sentence ratings-with-b)
-;    if empty? Rw
-;    [
-;      show who
-;      ifelse count my-neighbours with [not member? self already-asked] >= nBF
-;      ;[set acqs min-n-of nBF my-neighbours [oiseau-dist myself b]]
-;      [set acqs min-n-of nBF my-neighbours with [not member? self already-asked] [distance b]]
-;      [set acqs my-neighbours]
-;      let one one-of acqs
-;      set already-asked (turtle-set already-asked acqs)
-;      ask acqs [
-;        set Rwi query-ratings a self b (currRL + 1) already-asked Rw
-;      ]
-;      set Rw sentence Rw Rwi
-;      show Rw
-;    ]
-;    report Rw
-;  ]
-;  [ report [] ]
-;end
 
 to test
   let test1 turtle-set turtle 1
@@ -480,71 +453,6 @@ to test
   ask turtle 1 [ set test1 other test1 ]
   show test1
 end
-;to query-ratings [ b currRL ]
-;  let ratings-with-b []
-;  let acqs []
-;  if currRL <= nRL ;; or a found sufficient witnesses (?)
-;  [
-;    set ratings-with-b filter [rating -> item 1 rating = b] ratings
-;    ;show (sentence ratings-with-b)
-;    ifelse empty? ratings-with-b
-;    [
-;      ifelse count my-neighbours >= nBF
-;      ;[set acqs min-n-of nBF my-neighbours [oiseau-dist myself b]]
-;      [set acqs min-n-of nBF my-neighbours [distance b]]
-;      [set acqs my-neighbours]
-;      ask acqs [
-;        query-ratings b (currRL + 1)
-;      ]
-;      ;show Rw
-;    ]
-;    [
-;      set Rw lput (sentence ratings-with-b) Rw
-;    ]
-;  ]
-;end
-
-;;derecursion
-;to query-ratings [ a b currRL ]
-;  let stack []
-;  let elt []
-;  let ratings-with-b []
-;  let acqs []
-;  let already-asked no-turtles
-;  set stack lput (list a b currRL) stack
-;  while [not empty? stack]
-;  [
-;    ;show already-asked
-;    set elt item 0 stack
-;    set stack but-first stack
-;    ask item 0 elt [
-;      if item 2 elt <= nRL ;; or a found sufficient witnesses (?)
-;      [
-;        set ratings-with-b filter [rating -> item 1 rating = b] ratings
-;        ;show (sentence ratings-with-b)
-;        ifelse empty? ratings-with-b
-;        [
-;          ifelse count my-neighbours with [not member? self already-asked] >= nBF
-;          [
-;              set acqs min-n-of nBF my-neighbours with [not member? self already-asked] [oiseau-dist (item 0 elt) b]
-;              set already-asked (turtle-set already-asked acqs)
-;          ]
-;          [
-;            set acqs my-neighbours
-;            set already-asked (turtle-set already-asked acqs)
-;          ]
-;          ask acqs [
-;            set stack lput (list self b (item 2 elt + 1) ) stack
-;          ]
-;          ;show Rw
-;        ]
-;        [
-;          set Rw lput (sentence ratings-with-b) Rw
-;        ]
-;      ]
-;    ]
-;  ]
-;end
 @#$#@#$#@
 GRAPHICS-WINDOW
 0
@@ -600,8 +508,8 @@ SLIDER
 NC
 NC
 0
-1000
-1000.0
+1500
+1500.0
 1
 1
 NIL
@@ -658,6 +566,7 @@ PENS
 "IT" 1.0 0 -16777216 true "" "plotxy count-interactions overall-ug-it"
 "pen-1" 1.0 0 -7500403 false "" "plotxy count-interactions 0"
 "WR" 1.0 0 -2674135 true "" "plotxy count-interactions overall-ug-wr"
+"CR" 1.0 0 -955883 true "" "plotxy count-interactions overall-ug-cr"
 
 MONITOR
 797
@@ -694,7 +603,7 @@ radius-operations-consumer
 radius-operations-consumer
 0
 100
-20.0
+28.0
 1
 1
 NIL
@@ -709,7 +618,7 @@ radius-operations-provider
 radius-operations-provider
 0
 100
-20.0
+27.0
 1
 1
 NIL
@@ -804,7 +713,7 @@ min-activity-level
 min-activity-level
 0
 1
-0.25
+0.32
 0.01
 1
 NIL
@@ -1012,7 +921,7 @@ Wi
 Wi
 0
 5
-0.0
+2.0
 1
 1
 NIL
@@ -1028,6 +937,36 @@ Ww
 0
 5
 1.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+688
+239
+860
+272
+Wc
+Wc
+0
+5
+0.5
+0.5
+1
+NIL
+HORIZONTAL
+
+SLIDER
+1101
+172
+1273
+205
+NCcr
+NCcr
+0
+500
+500.0
 1
 1
 NIL
