@@ -1,16 +1,50 @@
 breed [ consumers consumer ]
 breed [ providers provider ]
 
-globals [ count-interactions overall-ug-it overall-ug-wr overall-ug-cr temperature lambda gamma Rw ]
-consumers-own [ ratings r_o my-providers my-neighbours has-trust no-trust ug activity-level active trust-component rt-flag chosen-provider it-component wr-component cr-component]
-providers-own [ r_o performance-level performance-level-label my-consumers certificates ]
+globals [
+  count-interactions
+  overall-ug-it
+  overall-ug-wr
+  overall-ug-cr
+  overall-ug-random
+  temperature lambda
+  gamma
+  Rw
+]
+consumers-own [
+  ratings
+  r_o
+  my-providers
+  my-neighbours
+  has-trust
+  no-trust
+  ug
+  activity-level
+  active
+  trust-component
+  rt-flag
+  chosen-provider
+  it-component
+  wr-component
+  cr-component
+]
+providers-own [
+  r_o
+  performance-level
+  performance-level-label
+  my-consumers
+  certificates
+]
 
 to setup
   clear-all
+  set max-pxcor r-sphere
   set temperature initial-temperature ;; temperature for exploit vs. exploration dilemma
   set count-interactions 1 ;; number of round of interactions
   set overall-ug-it 0
   set overall-ug-wr 0
+  set overall-ug-cr 0
+  set overall-ug-random 0
   set lambda (-(5 / ln(0.5) )) ;; recency factor used for computing interaction trust
   set gamma (- ln(0.5)) ;; reliability parameter
   set-default-shape turtles "circle"
@@ -42,8 +76,8 @@ to go
   set overall-ug-it mean [ug] of consumers with [active = 1 and trust-component = "IT"]
   set overall-ug-wr mean [ug] of consumers with [active = 1 and trust-component = "WR"]
   set overall-ug-cr mean [ug] of consumers with [active = 1 and trust-component = "CR"]
+  set overall-ug-random mean [ug] of consumers with [active = 1 and trust-component = "RANDOM"]
   set count-interactions count-interactions + 1
-;  show "-------------- Round ended ----------------"
   tick
 end
 
@@ -51,7 +85,6 @@ to setup-consumers
   create-consumers NC ;
   [
     set my-providers no-turtles;; list of providers in my radius of operations
-    ;set my-providers-dist [];; list of distances of providers
     set ratings [] ;; list of ratings : R(a,b,c) r=(a,b,i,c,v)
     set has-trust no-turtles ;; list of providers who already have a trust value
     set no-trust no-turtles ;; list of providers who don't have a trust value yet
@@ -87,6 +120,9 @@ to setup-consumers
     set wr-component false
     set cr-component true
   ]
+  ask n-of NCrandom consumers with [trust-component = "null"]
+    [set trust-component "RANDOM"]
+
 end
 
 to setup-providers
@@ -97,7 +133,6 @@ to setup-providers
   let PL_WORST -10
   create-providers NP ;
   [
-    ;set performance-level one-of [-10 -5 0 5 10] ;; performance level
     set performance-level "null"
     set my-consumers no-turtles
     set certificates []
@@ -108,7 +143,6 @@ to setup-providers
   ]
   ask n-of NPG providers with [performance-level = "null"]
   [
-;    set performance-level random-normal ((PL_GOOD + PL_PERFECT) / 2) sig-good
     let mu-good random-float (PL_PERFECT - PL_GOOD) + PL_GOOD
     set performance-level random-normal mu-good sig-good
     if performance-level > 10 [ set performance-level 10 ]
@@ -117,7 +151,6 @@ to setup-providers
   ]
   ask n-of NPO providers with [performance-level = "null"]
   [
-;    set performance-level random-normal ((PL_OK + PL_GOOD) / 2) sig-ordinary
     let mu-ordinary random-float (PL_GOOD - PL_OK) + PL_OK
     set performance-level random-normal mu-ordinary sig-good
     if performance-level > 10 [ set performance-level 10 ]
@@ -133,14 +166,12 @@ to setup-providers
   ]
   ask n-of NPB providers with [performance-level = "null"]
   [
-;    set performance-level random-normal ((PL_WORST + PL_OK) / 2) sig-bad
     let mu-bad random-float (PL_OK - PL_WORST) + PL_WORST
     set performance-level random-normal mu-bad sig-good
     if performance-level < -10 [ set performance-level -10 ]
     set performance-level-label "bad"
     set color green - 2
   ]
-  ;setup-provider-lists
 end
 
 to setup-lists ;; lists of neighbors and providers in a consumer's range
@@ -161,6 +192,8 @@ to-report choose-provider [ a ] ;; returns chosen provider
     let has-trust-tmp has-trust
     let no-trust-tmp no-trust
     ask my-providers [
+      if [trust-component] of myself = "RANDOM"
+      [set value-tmp "null"]
       if [trust-component] of myself = "IT" ;; IT COMPONENT
       [set value-tmp overall-trust myself self]
 ;      [set value-tmp compute-it myself self]
@@ -188,32 +221,24 @@ to-report choose-provider [ a ] ;; returns chosen provider
     set has-trust has-trust-tmp
     set no-trust no-trust-tmp
   ]
-  if count no-trust = 0
+  if count [no-trust] of a = 0
   [
     set chosen item 1 max-value ;; if there are no providers without a trust value, choose the best one
-    ;show chosen
-    ;show "NO-TRUST IS EMPTY, CHOOSING BEST PROVIDER"
-    ;show count no-trust
     report chosen
   ]
-  if count has-trust = 0
+  if count [has-trust] of a = 0
   [
-    set chosen one-of no-trust ;; if it's the consumer's first interaction, choose a random provider
-    ;show "HAS-TRUST IS EMPTY, CHOOSING RANDOM PROVIDER"
-    ;show chosen
+    set chosen one-of [no-trust] of a ;; if it's the consumer's first interaction, choose a random provider
     report chosen
   ]
   set er1 expected-return a trust-values max-value ;; compute expected return of choosing a provider without a trust value and choose it based on formula
   ifelse random-float 1.0 <= er1
   [
     set chosen item 1 max-value
-    ;show "CHOSE ACTION A1 (BEST PROVIDER : EXPLOIT)"
     report chosen
-
   ]
   [
-    set chosen one-of no-trust
-    ;show "CHOSE ACTION A2 (RANDOM PROVIDER IN NO-TRUST : EXPLORE)"
+    set chosen one-of [no-trust] of a
     report chosen
   ]
 end
@@ -226,12 +251,11 @@ to-report expected-return [ a trust-values max-value]
     if item 0 couple != "null"
     [set trust-values-providers lput item 0 couple trust-values-providers]
   ]
-  ;show trust-values-providers
   ask a [
-;    set er-1 exp ( item 0 max-value / temperature )
-    set er-1 exp ( item 0 max-value * ln ticks )
-;    set er-2 er-1 + exp ( mean trust-values-providers / temperature )
-    set er-2 er-1 + exp ( mean trust-values-providers * ln ticks )
+    set er-1 exp ( item 0 max-value / temperature )
+;    set er-1 exp ( item 0 max-value * ln ticks )
+    set er-2 er-1 + exp ( mean trust-values-providers / temperature )
+;    set er-2 er-1 + exp ( mean trust-values-providers * ln ticks )
   ]
   report (er-1 / er-2)
 end
@@ -272,127 +296,49 @@ to add-certificate [a b c v]
 end
 
 to-report oiseau-dist [ a b ]
-  let r-sphere max-pxcor
   let corde2 ([xcor] of b / r-sphere - [xcor] of a / r-sphere)^ 2 + ([ycor] of b / r-sphere - [ycor] of a / r-sphere)^ 2 + ([zcor] of b / r-sphere - [zcor] of a / r-sphere)^ 2 ;(x2 - x1)² + (y2 - y1)² + (z2 - z1)²
   report acos ( 1 - corde2 / 2 )
 end
 
-;;a b i c v
-;; compute interaction trust component
-;; returns (Ti, Ri)
-to-report compute-it [ a b ]
-  let it 0
-  let omega 0
-  let Ri []
-  set Ri get-ratings-with-b a b
-  ifelse (empty? Ri) [ report "null" ]
-  [
-    foreach Ri [ rating ->
-      set it it + ((item 4 rating) * exp (- (count-interactions - item 2 rating) / lambda ))
-      set omega omega + exp (- (count-interactions - item 2 rating) / lambda )
-    ]
-  ]
-  report it / omega
-end
-
-;to-report overall-trust [ a b ]
-;  let nomT 0
-;  let omega 0
-;  let Wk 0
-;  if [it-component] of a
-;  [
-;    let Ri get-ratings-with-b a b
-;    let coupleI component-trust Ri "IT"
-;    if empty? coupleI [ report "null" ]
-;    set nomT nomT + (Wi * item 1 coupleI) * item 0 coupleI
-;    set omega omega + (Wi * item 1 coupleI)
-;    set Wk Wk + Wi
-;  ]
-;
-;  if [wr-component] of a
-;  [
-;    set Rw []
-;    query-ratings a a b 0 no-turtles
-;    let coupleW component-trust Rw "WR"
-;    if empty? coupleW [ report "null" ]
-;    set nomT (nomT + (Ww * item 1 coupleW) * item 0 coupleW)
-;    set omega omega + (Ww * item 1 coupleW)
-;    set Wk Wk + Ww
-;  ]
-;
-;  if [cr-component] of a
-;  [
-;    let Rc ([certificates] of b)
-;    let coupleC component-trust Rc "CR"
-;    if empty? coupleC [ report "null" ]
-;    set nomT (nomT + (Wc * item 1 coupleC) * item 0 coupleC)
-;    set omega (omega + (Wc * item 1 coupleC) )
-;    set Wk Wk + Wc
-;  ]
-;  if omega = 0 [ report 0 ]
-;  report nomT / omega
-;end
-
 to-report overall-trust [ a b ]
-  let nomT []
-  let omega []
+  let nomT 0
+  let omega 0
   let Wk 0
   if [it-component] of a
   [
     let Ri get-ratings-with-b a b
     let coupleI component-trust Ri "IT"
-    if empty? coupleI [ report "null" ]
-    set nomT (fput item 0 coupleI nomT)
-    set omega (fput (Wi * item 1 coupleI) omega)
-    set Wk Wk + Wi
+    if not empty? coupleI [
+      set nomT nomT + (Wi * item 1 coupleI) * item 0 coupleI
+      set omega omega + (Wi * item 1 coupleI)
+      set Wk Wk + Wi
+    ]
   ]
-
   if [wr-component] of a
   [
     set Rw []
     query-ratings a a b 0 no-turtles
     let coupleW component-trust Rw "WR"
-    if empty? coupleW [ report "null" ]
-    set nomT (fput item 0 coupleW nomT)
-    set omega (fput (Ww * item 1 coupleW) omega)
-    set Wk Wk + Ww
+    if not empty? coupleW [
+      set nomT (nomT + (Ww * item 1 coupleW) * item 0 coupleW)
+      set omega omega + (Ww * item 1 coupleW)
+      set Wk Wk + Ww
+    ]
   ]
-
   if [cr-component] of a
   [
     let Rc ([certificates] of b)
     let coupleC component-trust Rc "CR"
-    if empty? coupleC [ report "null" ]
-    set nomT (fput item 0 coupleC nomT)
-    set omega (fput (Wc * item 1 coupleC) omega)
-    set Wk Wk + Wc
+    if not empty? coupleC [
+      set nomT (nomT + (Wc * item 1 coupleC) * item 0 coupleC)
+      set omega (omega + (Wc * item 1 coupleC) )
+      set Wk Wk + Wc
+    ]
   ]
 
-  if empty? omega [ report "null" ]
-  report (sum (map * omega nomT)) / (sum omega)
+  if (omega != 0) [ report nomT / omega ]
+  report "null"
 end
-
-;; computes Tk and rhoK
-;to-report component-trust [ Rk component ]
-;  let nomT 0
-;  let nomRho 0
-;  let omega 0
-;  let Tk 0
-;  ifelse not empty? Rk [
-;    foreach Rk [ rating ->
-;      set nomT nomT + ((item 4 rating) * exp (- (count-interactions - item 2 rating) / lambda ))
-;      set omega omega + exp (- (count-interactions - item 2 rating) / lambda )
-;    ]
-;    set Tk nomT / omega
-;    foreach Rk [ rating ->
-;      set nomRho nomRho + (abs (item 4 rating - Tk) * (exp (- (count-interactions - item 2 rating) / lambda )))
-;    ]
-;    let rhoRK (1 - exp (- gamma * omega))
-;    let rhoDK 1 - ( 0.5 * ( nomRho / omega ) )
-;    let rhoK rhoRK * rhoDK
-;    report (list Tk rhoK)
-;  ][ report [] ]
-;end
 
 to-report component-trust [ Rk component ]
   let nomT 0
@@ -442,16 +388,7 @@ to query-ratings [ caller a b currRL already-asked ]
       [query-ratings caller self b currRL already-asked]
       set Rw (sentence Rwi Rw)
     ]
-;    show Rw
   ]
-end
-
-
-to test
-  let test1 turtle-set turtle 1
-  show test1
-  ask turtle 1 [ set test1 other test1 ]
-  show test1
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -484,10 +421,10 @@ ticks
 30.0
 
 BUTTON
-23
-49
-86
-82
+28
+237
+91
+270
 NIL
 setup
 NIL
@@ -500,41 +437,11 @@ NIL
 NIL
 1
 
-SLIDER
-12
-134
-251
-167
-NC
-NC
-0
-1500
-1500.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-263
-46
-500
-79
-NP
-NP
-0
-500
-100.0
-1
-1
-NIL
-HORIZONTAL
-
 BUTTON
-23
-16
-86
-49
+111
+237
+174
+270
 NIL
 go
 T
@@ -548,11 +455,11 @@ NIL
 1
 
 PLOT
-10
-326
-773
-571
-UG for IT
+21
+291
+784
+536
+UG
 Interactions
 UG
 1.0
@@ -563,16 +470,17 @@ true
 false
 "" ""
 PENS
-"IT" 1.0 0 -16777216 true "" "plotxy count-interactions overall-ug-it"
-"pen-1" 1.0 0 -7500403 false "" "plotxy count-interactions 0"
-"WR" 1.0 0 -2674135 true "" "plotxy count-interactions overall-ug-wr"
-"CR" 1.0 0 -955883 true "" "plotxy count-interactions overall-ug-cr"
+"IT" 1.0 0 -16777216 true "" "if IT? [plotxy count-interactions overall-ug-it]"
+"IT-WR" 1.0 0 -2674135 true "" "if WR? [plotxy count-interactions overall-ug-wr]"
+"IT-CR" 1.0 0 -955883 true "" "if CR? [plotxy count-interactions overall-ug-cr]"
+"RANDOM" 1.0 0 -13791810 true "" "if RANDOM? [plotxy count-interactions overall-ug-random]"
+"zero" 1.0 0 -7500403 true "" "plotxy count-interactions 0"
 
 MONITOR
-797
+783
+291
+876
 336
-912
-381
 mean UG (IT) 
 overall-ug-it
 5
@@ -580,10 +488,10 @@ overall-ug-it
 11
 
 SLIDER
-685
-36
-923
-69
+544
+31
+782
+64
 initial-temperature
 initial-temperature
 1
@@ -595,25 +503,25 @@ NIL
 HORIZONTAL
 
 SLIDER
-14
-232
-253
-265
+18
+150
+261
+183
 radius-operations-consumer
 radius-operations-consumer
 0
 100
-28.0
+27.0
 1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-262
-79
-501
-112
+274
+248
+516
+281
 radius-operations-provider
 radius-operations-provider
 0
@@ -624,29 +532,11 @@ radius-operations-provider
 NIL
 HORIZONTAL
 
-PLOT
-10
-580
-257
-700
-Temperature
-NIL
-NIL
-0.0
-10.0
-0.0
-10.0
-true
-true
-"" ""
-PENS
-"temperature" 1.0 0 -2674135 true "" "plotxy count-interactions temperature"
-
 BUTTON
-86
-16
-176
-49
+174
+237
+237
+270
 go-once
 go
 NIL
@@ -660,40 +550,40 @@ NIL
 1
 
 TEXTBOX
-314
-21
-464
-39
+326
+10
+476
+28
 Provider parameters
 12
 0.0
 1
 
 TEXTBOX
-62
-103
-212
-121
+65
+10
+215
+28
 Consumer parameters
 12
 0.0
 1
 
 TEXTBOX
-738
-15
-888
-33
+597
+10
+747
+28
 Global parameters
 12
 0.0
 1
 
 SLIDER
-685
-69
-924
-102
+544
+64
+782
+97
 H
 H
 0
@@ -705,40 +595,25 @@ NIL
 HORIZONTAL
 
 SLIDER
-14
-264
-253
-297
+18
+182
+261
+215
 min-activity-level
 min-activity-level
 0
 1
-0.32
+0.25
 0.01
 1
 NIL
 HORIZONTAL
 
 SLIDER
-262
-111
-501
-144
-NPG
-NPG
-0
-100
-10.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-500
-111
-672
-144
+274
+149
+516
+182
 sig-good
 sig-good
 0
@@ -750,25 +625,10 @@ NIL
 HORIZONTAL
 
 SLIDER
-262
-144
-501
-177
-NPO
-NPO
-0
-100
-40.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-501
-144
-673
-177
+274
+182
+516
+215
 sig-ordinary
 sig-ordinary
 0
@@ -780,173 +640,66 @@ NIL
 HORIZONTAL
 
 SLIDER
-262
-176
-501
-209
-NPI
-NPI
-0
-100
-5.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-262
-209
-501
-242
-NPB
-NPB
-0
-100
-45.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-501
-209
-673
-242
+274
+215
+516
+248
 sig-bad
 sig-bad
 0
 10
 2.0
 0.1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-687
-104
-922
-137
-nBF
-nBF
-1
-5
-2.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-13
-169
-252
-202
-NCit
-NCit
-0
-500
-500.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-14
-201
-249
-234
-NCwr
-NCwr
-0
-500
-500.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-688
-137
-923
-170
-nRL
-nRL
-1
-10
-5.0
-1
 1
 NIL
 HORIZONTAL
 
 MONITOR
-798
+783
+336
+875
 381
-913
-426
 mean UG (WR)
 overall-ug-wr
 5
 1
 11
 
-BUTTON
-111
-52
-174
-85
-NIL
-test
-NIL
-1
-T
-OBSERVER
-NIL
-NIL
-NIL
-NIL
-1
-
 SLIDER
-689
-170
-861
-203
+544
+96
+782
+129
 Wi
 Wi
 0
 5
 2.0
-1
+0.5
 1
 NIL
 HORIZONTAL
 
 SLIDER
-689
-206
-861
-239
+544
+129
+782
+162
 Ww
 Ww
 0
 5
 1.0
-1
+0.5
 1
 NIL
 HORIZONTAL
 
 SLIDER
-688
-239
-860
-272
+544
+162
+782
+195
 Wc
 Wc
 0
@@ -957,20 +710,192 @@ Wc
 NIL
 HORIZONTAL
 
-SLIDER
-1101
-172
-1273
-205
-NCcr
-NCcr
+MONITOR
+783
+380
+875
+425
+mean UG (CR)
+overall-ug-cr
+5
+1
+11
+
+INPUTBOX
+18
+30
+79
+90
+NC
+2000.0
+1
 0
-500
+Number
+
+INPUTBOX
+19
+90
+79
+150
+NCit
 500.0
 1
+0
+Number
+
+INPUTBOX
+79
+90
+140
+150
+NCwr
+500.0
 1
-NIL
-HORIZONTAL
+0
+Number
+
+INPUTBOX
+140
+90
+201
+150
+NCcr
+500.0
+1
+0
+Number
+
+INPUTBOX
+201
+90
+262
+150
+NCrandom
+500.0
+1
+0
+Number
+
+INPUTBOX
+274
+30
+335
+90
+NP
+100.0
+1
+0
+Number
+
+INPUTBOX
+274
+89
+335
+149
+NPG
+10.0
+1
+0
+Number
+
+INPUTBOX
+333
+89
+394
+149
+NPO
+40.0
+1
+0
+Number
+
+INPUTBOX
+393
+89
+455
+149
+NPI
+5.0
+1
+0
+Number
+
+INPUTBOX
+454
+89
+516
+149
+NPB
+45.0
+1
+0
+Number
+
+INPUTBOX
+780
+31
+832
+97
+nBF
+2.0
+1
+0
+Number
+
+INPUTBOX
+780
+96
+832
+162
+nRL
+5.0
+1
+0
+Number
+
+SWITCH
+544
+195
+660
+228
+IT?
+IT?
+1
+1
+-1000
+
+SWITCH
+660
+195
+782
+228
+WR?
+WR?
+0
+1
+-1000
+
+SWITCH
+544
+228
+660
+261
+CR?
+CR?
+0
+1
+-1000
+
+SWITCH
+660
+228
+782
+261
+RANDOM?
+RANDOM?
+1
+1
+-1000
 
 @#$#@#$#@
 ## WHAT IS IT?
